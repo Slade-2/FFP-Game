@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Server, Socket } from 'socket.io';
+import { BotBrain } from './bot';
 import type { GameDatabase } from './db';
 import { GameEngine, type GameMode, type GamePlayer } from './game';
 import { findSmallestWinningPlay, type Card } from './rules';
@@ -47,9 +48,11 @@ export class Room {
   private readonly database: GameDatabase;
   private readonly options: RoomOptions;
   private readonly members = new Map<number, RoomMember>();
+  private readonly botBrains: Map<number, BotBrain>;
   private game: GameEngine | null = null;
   private actionTimer: NodeJS.Timeout | null = null;
   private actionDeadline: Record<string, unknown> | null = null;
+  private tableActive = false;
   private lastTurn: Record<string, unknown> | null = null;
   private lastTurnControl: Record<string, unknown> | null = null;
   private lastCallResult: Record<string, unknown> | null = null;
@@ -70,6 +73,7 @@ export class Room {
     mode: GameMode,
     kind: RoomKind,
     options: RoomOptions,
+    botBrains: Map<number, BotBrain>,
   ) {
     this.io = io;
     this.database = database;
@@ -77,6 +81,7 @@ export class Room {
     this.mode = mode;
     this.kind = kind;
     this.options = options;
+    this.botBrains = botBrains;
   }
 
   addMember(socket: Socket, nickname: string, playerToken?: string): JoinRoomResult {
@@ -286,6 +291,7 @@ export class Room {
     this.clearActionTimer();
     this.clearBotTimers();
     this.clearRematchTimer();
+    this.botBrains.clear();
   }
 
   private startGame(): void {
@@ -302,6 +308,13 @@ export class Room {
     this.lastCallResult = null;
     this.lastTeamReveal = null;
     this.lastGameOver = null;
+    this.tableActive = false;
+    this.botBrains.clear();
+    for (const member of this.members.values()) {
+      if (member.isBot) {
+        this.botBrains.set(member.seat, new BotBrain(member.seat, this.mode));
+      }
+    }
     this.game = new GameEngine(players, this.mode, {
       emit: (event, payload, seat) => {
         this.handleGameEvent(event, payload, seat);
@@ -329,6 +342,7 @@ export class Room {
       this.clearBotTimers();
       this.applyScores(payload.scoreChanges as number[], payload);
       this.lastGameOver = payload;
+      this.botBrains.clear();
       this.broadcastState();
       this.scheduleBotRematchVotes();
     } else if (event === 'game:call-request' && seat !== undefined) {
@@ -358,12 +372,42 @@ export class Room {
       this.clearActionTimer();
       this.lastCallResult = { ...payload, replay: false };
       this.io.to(this.id).emit(event, this.lastCallResult);
+      for (const brain of this.botBrains.values()) {
+        brain.onCallResult(payload.callerSeat as number, payload.r as number, payload.s as number);
+      }
       return;
     } else if (event === 'game:team-reveal' && seat !== undefined) {
       this.lastTeamReveal = { targetSeat: seat, payload };
       const target = this.memberAt(seat);
       if (!target.isBot) {
         this.io.to(target.socketId).emit(event, payload);
+      }
+      this.botBrains.get(seat)?.onTeamReveal({
+        callerSeat: payload.callerSeat as number,
+        teammateSeat: payload.teammateSeat as number,
+        selfCall: payload.selfCall === true,
+      });
+      return;
+    } else if (event === 'game:play') {
+      this.io.to(this.id).emit(event, payload);
+      const wasLead = !this.tableActive;
+      this.tableActive = true;
+      const cardCounts = this.requireGame().getCardCounts();
+      for (const brain of this.botBrains.values()) {
+        brain.onPlay(
+          payload.seat as number,
+          payload.cards as Card[],
+          payload.remaining as number,
+          cardCounts,
+          wasLead,
+        );
+      }
+      return;
+    } else if (event === 'game:round-reset') {
+      this.tableActive = false;
+      this.io.to(this.id).emit(event, payload);
+      for (const brain of this.botBrains.values()) {
+        brain.onRoundReset();
       }
       return;
     }
@@ -402,7 +446,11 @@ export class Room {
       if (!this.game || this.game.phase !== 'calling' || this.game.currentSeat !== seat) {
         return;
       }
-      this.game.call(seat, Math.floor(Math.random() * 7), Math.floor(Math.random() * 4));
+      const brain = this.botBrains.get(seat);
+      const call = brain
+        ? brain.chooseCall(this.game.getHand(seat))
+        : { r: Math.floor(Math.random() * 7), s: Math.floor(Math.random() * 4) };
+      this.game.call(seat, call.r, call.s);
     }, this.botDelay()));
   }
 
@@ -414,16 +462,20 @@ export class Room {
         return;
       }
 
-      const hand = this.game.getHand(seat);
-      const cards = findSmallestWinningPlay(
-        hand,
-        this.game.currentTable?.cards ?? null,
-        this.game.isFirstPlay,
-      );
+      const game = this.game;
+      const hand = game.getHand(seat);
+      const cardCounts = game.getCardCounts();
+      const table = game.currentTable?.cards ?? null;
+      const brain = this.botBrains.get(seat);
+      const cards = brain
+        ? (table
+          ? brain.chooseResponse(hand, table, cardCounts)
+          : brain.chooseLead(hand, cardCounts))
+        : findSmallestWinningPlay(hand, table, game.isFirstPlay && table === null);
       if (cards) {
-        this.game.play(seat, cards);
-      } else if (this.game.currentTable) {
-        this.game.pass(seat);
+        game.play(seat, cards);
+      } else if (game.currentTable) {
+        game.pass(seat);
       }
     }, this.botDelay()));
   }
@@ -642,6 +694,8 @@ export class RoomManager {
   private readonly database: GameDatabase;
   private readonly options: RoomOptions;
   private readonly rooms = new Map<string, Room>();
+  // 按房间分组，保证多个机器人房并存时同一座位号的机器人不会共用大脑。
+  private readonly botBrains = new Map<string, Map<number, BotBrain>>();
 
   constructor(io: Server, database: GameDatabase, options: RoomOptions) {
     this.io = io;
@@ -660,6 +714,8 @@ export class RoomManager {
     },
   ): CreateRoomResult {
     const roomId = this.generateRoomId();
+    const botBrains = new Map<number, BotBrain>();
+    this.botBrains.set(roomId, botBrains);
     const room = new Room(
       this.io,
       this.database,
@@ -667,6 +723,7 @@ export class RoomManager {
       mode,
       roomOptions.kind,
       this.options,
+      botBrains,
     );
     const result = room.addMember(socket, nickname, playerToken);
     if (roomOptions.withBots) {
@@ -747,6 +804,7 @@ export class RoomManager {
       room.close();
     }
     this.rooms.clear();
+    this.botBrains.clear();
   }
 
   private resolve(socket: Socket): { room: Room; seat: number } {

@@ -520,3 +520,41 @@
 - `gh repo view`：visibility 为 `PUBLIC`，default branch 仍为 `main`。
 - 未登录态匿名请求：`https://api.github.com/repos/Slade-2/FFP-Game` 返回 200。
 - 未登录态匿名读取：`https://raw.githubusercontent.com/Slade-2/FFP-Game/main/README.md` 返回 200。
+
+## 本次任务：打花/打朋友机器人智能升级（分支 `codex/FFP-bot`）
+
+### 修改内容
+
+- 新增 `server/bot.ts`：`BotBrain` 类，每个机器人座位每局一个实例，只持有自己的座位/模式、公开事件推断出的关系分 `Map<座位, 分数>` 和桌牌跟踪，不持有 `GameEngine` 引用。
+  - `chooseCall(hand)`：弱手牌在 2~5（6~9）里挑自己一张没有的点数、且花色也挑自己没有的，保证不误自叫；强手牌（大牌 ≥5，或组合 ≥2 且大牌 ≥3）叫自己持有的 2~6 中等牌。
+  - `chooseLead(hand, cardCounts)`：枚举手牌里的单张、对子/三张/四张、顺子、同花、三带二、四带一、同花顺；首手只出含方块4 的候选（优先张数多），能一手出完直接出，残局按队友/敌人剩 ≤2 张决定喂最小单张或堵最大对子/单张，默认按“张数多 → 强度低”出组合，默认保留同花顺不出。
+  - `chooseResponse(hand, table, cardCounts)`：能一手出完必出；桌牌出自确定队友则 pass；确定敌人剩 ≤2 张时用最省牌管住；其余情况在 `findAllWinningPlays` 结果里按成本（低强度优先，拆对子/顺子/同花 +2，拆三张/四张 +2，大牌管小牌 +3）选最低成本。
+- `server/rules.ts`：导出 `LEAD_TYPE_RANK`；把 `findSmallestWinningPlay` 内部的组合枚举抽成 `findAllWinningPlays(hand, tableCards)`，并新增 `comparePlayStrength`；`findSmallestWinningPlay`、`game.ts` 的 `canRespond` 行为不变。牌型判定 `detect` 与大小 `beats` 未改动。
+- `server/room.ts`：
+  - `RoomManager` 持有 `botBrains` 注册表，按 `roomId → Map<seat, BotBrain>` 两级存储。这里没有用需求里单层 `Map<number, BotBrain>`，是因为服务端允许多个机器人房并存，单层键会在不同房间相同座位号之间互相覆盖、并在一个房间终局时误删另一个房间的大脑；两级 Map 仍满足“每个机器人座位每局一个大脑、开局创建、终局丢弃”。
+  - `startGame()` 开局为每个机器人座位创建大脑（重赛重新创建），`game:over` 与 `close()` 丢弃。
+  - `scheduleBotCall` / `scheduleBotPlay` 改调 `brain.chooseCall` / `brain.chooseLead` / `brain.chooseResponse`，`botDelay()`、超时托管与原有最小可管牌 fallback 保持不变；`pass` 是大脑的显式决策，不会被 fallback 覆盖。
+  - `handleGameEvent` 在广播后喂大脑：`game:call-result` 喂全部大脑，`game:play`（带 `wasLead`、剩余牌数）与 `game:round-reset` 喂全部大脑；`game:team-reveal` 只喂目标座位的大脑，避免私密身份泄露给其他机器人。未新增网络协议、未改客户端。
+
+### 关系分模型
+
+- 初始化：打花三家 -100；打朋友时叫牌人自叫（自叫由私发 `game:team-reveal.selfCall` 确认）三家 -100、非自叫三家 0；被叫者收到揭示后叫牌人 +100、另两家 -100；路人默认叫牌人 -100、另两家 0，看到有人打出被叫牌时该人 +100。
+- 动态：打出被叫牌 +100/-100；管确定队友的牌 -15（已出完则不扣）；领小牌喂剩 ≤2 张的队友 +15；管住剩 ≤2 张的确定敌人 +10。自己的出牌只更新桌牌跟踪，不参与加减分。上下限用“不越过 60 / -60 边界”的钳制，已锁定 ±100 的关系不会被这些 ±15/+10 反向拉回。
+- 残局判断只对“还剩 1~2 张”的座位生效：已出完（0 张）的队友无需喂牌、已出完的敌人也无法再被堵，避免浪费控制牌。
+
+### 信息边界
+
+- `BotBrain` 只接收自己手牌与公开事件（叫牌结果、公开出牌/pass 后的剩余牌数、名次、发给自己的 `team-reveal`），全部判断基于 `lastTeamReveal.targetSeat === seat` 这类公开/私有目标信息，未读取 `GameEngine` 私有字段（`teammateSeat`、`hands` 等），也未读取他人手牌。`cardCounts` 来自公开 getter `GameEngine.getCardCounts()`。
+
+### 验证结果
+
+- `npx vitest run tests/bot.test.ts`：14 个用例通过（覆盖需求列出的 8 项 + 强手自叫、出完不扣分、被叫者初始化、残局喂牌/堵牌、默认不领同花顺）。
+- `npm test`：9 个测试文件、49 个测试全部通过。
+- `npm run build`：服务端 TypeScript 与前端 Vue/Vite 生产构建通过。
+- 端到端模拟：4 个 `BotBrain` 驱动 `dahua` 与 `dapengyou` 各 30 个随机种子完整对局，无非法出牌、无卡死。
+- `npx tsc -p tsconfig.server.json --noEmit`：服务端严格模式无错误。
+
+### 未验证项与残余风险
+
+- 未做浏览器真人 + 机器人对局的观感验证（只做了单测与无头整局模拟）；机器人决策质量需要在真实对局里继续观察。
+- `npx tsc -p tsconfig.json --noEmit` 仍会报 `tests/db.test.ts`、`tests/m5.test.ts`、`tests/server.test.ts` 的历史类型错误（与本次改动无关，`npm test` 与 `npm run build` 均通过）。

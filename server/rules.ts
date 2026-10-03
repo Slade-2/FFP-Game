@@ -32,7 +32,7 @@ const TYPE_RANK: Partial<Record<PlayType, number>> = {
   STRAIGHT_FLUSH: 4,
 };
 
-const LEAD_TYPE_RANK: Record<PlayType, number> = {
+export const LEAD_TYPE_RANK: Record<PlayType, number> = {
   SINGLE: 0,
   PAIR: 1,
   TRIPLE: 2,
@@ -234,10 +234,17 @@ export function findSmallestWinningPlay(
     return sortedHand[0] ? [{ ...sortedHand[0] }] : null;
   }
 
+  const candidates = findAllWinningPlays(sortedHand, tableCards);
+  candidates.sort(comparePlayStrength);
+  return candidates[0] ?? null;
+}
+
+export function findAllWinningPlays(hand: Card[], tableCards: Card[]): Card[][] {
   if (!detect(tableCards)) {
-    return null;
+    return [];
   }
 
+  const sortedHand = [...hand].sort((a, b) => a.r - b.r || a.s - b.s);
   const candidates: Card[][] = [];
   const picked: Card[] = [];
   const collect = (start: number, targetSize: number): void => {
@@ -258,28 +265,31 @@ export function findSmallestWinningPlay(
     collect(0, size);
   }
 
-  candidates.sort((left, right) => {
-    const leftPlay = detect(left) as Play;
-    const rightPlay = detect(right) as Play;
-    const leftKey = [
-      LEAD_TYPE_RANK[leftPlay.type],
-      leftPlay.cards.length,
-      leftPlay.key.r,
-      leftPlay.key.s ?? leftPlay.key.maxSuit ?? -1,
-    ];
-    const rightKey = [
-      LEAD_TYPE_RANK[rightPlay.type],
-      rightPlay.cards.length,
-      rightPlay.key.r,
-      rightPlay.key.s ?? rightPlay.key.maxSuit ?? -1,
-    ];
-    for (let index = 0; index < leftKey.length; index += 1) {
-      if (leftKey[index] !== rightKey[index]) {
-        return leftKey[index] - rightKey[index];
-      }
-    }
-    return 0;
-  });
+  return candidates;
+}
 
-  return candidates[0] ?? null;
+export function comparePlayStrength(leftCards: Card[], rightCards: Card[]): number {
+  const left = detect(leftCards);
+  const right = detect(rightCards);
+  if (!left || !right) {
+    return 0;
+  }
+  const leftKey = [
+    LEAD_TYPE_RANK[left.type],
+    left.cards.length,
+    left.key.r,
+    left.key.s ?? left.key.maxSuit ?? -1,
+  ];
+  const rightKey = [
+    LEAD_TYPE_RANK[right.type],
+    right.cards.length,
+    right.key.r,
+    right.key.s ?? right.key.maxSuit ?? -1,
+  ];
+  for (let index = 0; index < leftKey.length; index += 1) {
+    if (leftKey[index] !== rightKey[index]) {
+      return leftKey[index] - rightKey[index];
+    }
+  }
+  return 0;
 }
