@@ -22,13 +22,15 @@ afterEach(async () => {
   }
 });
 
-async function createHarness(): Promise<ServerHarness> {
+async function createHarness(
+  overrides: { botActionDelayMs?: number; rematchTimeoutMs?: number } = {},
+): Promise<ServerHarness> {
   const appServer = createAppServer({
     dbPath: ':memory:',
     playTimeoutMs: 10,
     quickPassTimeoutMs: 10,
-    botActionDelayMs: 0,
-    rematchTimeoutMs: 1000,
+    botActionDelayMs: overrides.botActionDelayMs ?? 0,
+    rematchTimeoutMs: overrides.rematchTimeoutMs ?? 1000,
   });
   await new Promise<void>((resolve) => {
     appServer.httpServer.listen(0, '127.0.0.1', resolve);
@@ -148,6 +150,71 @@ describe('第三轮测试端、机器人与重赛', () => {
     const history = await response.json();
     expect(history.ok).toBe(true);
     expect(history.matches).toEqual([]);
+  }, 20_000);
+
+  it('正式房对局结束后机器人自动投赞成票，仍需真人确认才重开', async () => {
+    const harness = await createHarness();
+    const socket = await connect(harness);
+    const created = await emitAck(socket, 'room:create', {
+      nickname: '正式房玩家',
+      mode: 'dahua',
+    });
+    expect(created.ok).toBe(true);
+
+    for (let index = 0; index < 3; index += 1) {
+      expect((await emitAck(socket, 'room:add-bot', {})).ok).toBe(true);
+    }
+
+    const voteStates: Array<{ count: number; votes: number[] }> = [];
+    const cancelled = once(socket, 'game:rematch-cancelled');
+    socket.on('game:rematch-state', (payload: { count: number; votes: number[] }) => {
+      voteStates.push(payload);
+    });
+
+    const overPromise = once(socket, 'game:over');
+    expect(await emitAck(socket, 'room:ready', {})).toEqual({ ok: true });
+    const over = await withTimeout(overPromise, 15_000);
+    expect(over.payload.rankings).toHaveLength(4);
+
+    const startsAfterOver: unknown[] = [];
+    socket.on('game:start', (payload: unknown) => startsAfterOver.push(payload));
+
+    await waitUntil(() => voteStates.some((state) => [1, 2, 3].every(
+      (seat) => state.votes.includes(seat),
+    )), 2000);
+    const botVotes = voteStates.find((state) => [1, 2, 3].every(
+      (seat) => state.votes.includes(seat),
+    ));
+    expect(botVotes?.count).toBe(3);
+
+    await withTimeout(cancelled, 3000);
+    expect(startsAfterOver).toHaveLength(0);
+  }, 20_000);
+
+  it('真人离开后机器人不再投票，也不会无人确认直接重开', async () => {
+    const harness = await createHarness({ botActionDelayMs: 100, rematchTimeoutMs: 300 });
+    const socket = await connect(harness);
+    expect((await emitAck(socket, 'room:create', {
+      nickname: '要离开的玩家',
+      mode: 'dahua',
+    })).ok).toBe(true);
+    for (let index = 0; index < 3; index += 1) {
+      expect((await emitAck(socket, 'room:add-bot', {})).ok).toBe(true);
+    }
+
+    const overPromise = once(socket, 'game:over');
+    expect(await emitAck(socket, 'room:ready', {})).toEqual({ ok: true });
+    const over = await withTimeout(overPromise, 15_000);
+    expect(over.payload.rankings).toHaveLength(4);
+
+    expect((await emitAck(socket, 'room:leave', {})).ok).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+
+    const probe = await connect(harness);
+    expect((await emitAck(probe, 'room:create', {
+      nickname: '探针玩家',
+      mode: 'dahua',
+    })).ok).toBe(true);
   }, 20_000);
 });
 

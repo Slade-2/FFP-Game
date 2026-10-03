@@ -527,9 +527,6 @@ export class Room {
   }
 
   private scheduleBotRematchVotes(): void {
-    if (this.kind !== 'test') {
-      return;
-    }
     for (const member of this.members.values()) {
       if (!member.isBot) {
         continue;
@@ -538,6 +535,10 @@ export class Room {
       this.botTimers.set(member.seat, setTimeout(() => {
         this.botTimers.delete(member.seat);
         if (this.game?.phase !== 'over' || !this.members.has(member.seat)) {
+          return;
+        }
+        // 真人已全部离开时房间人数不足 4 人：投票会触发人数异常，且全票通过会无人确认直接重开。
+        if (this.members.size < 4) {
           return;
         }
         this.setRematchVote(member.seat, true);

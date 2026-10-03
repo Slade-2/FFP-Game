@@ -558,3 +558,19 @@
 
 - 未做浏览器真人 + 机器人对局的观感验证（只做了单测与无头整局模拟）；机器人决策质量需要在真实对局里继续观察。
 - `npx tsc -p tsconfig.json --noEmit` 仍会报 `tests/db.test.ts`、`tests/m5.test.ts`、`tests/server.test.ts` 的历史类型错误（与本次改动无关，`npm test` 与 `npm run build` 均通过）。
+
+## 本次小改：机器人"再来一局"自动投票（同分支 `codex/FFP-bot`）
+
+### 修改内容
+
+- `server/room.ts`：删除 `scheduleBotRematchVotes()` 开头的 `if (this.kind !== 'test') return;`，所有房间（含正式房）的机器人在 `game:over` 后都会自动投赞成票；`botActionDelayMs ?? 500` 延迟、30 秒超时取消、投票切换（投反对/取消）逻辑均未改。人类玩家仍需手动确认，全票（含机器人票）后才会开新局。
+- `server/room.ts` 增加边界防护：机器人投票定时器里先判断 `this.members.size < 4` 再投票。真人全部离开后房间只剩 3 个机器人时，继续投票会命中 `setRematchVote` 的"房间人数不足"异常（`setTimeout` 内抛错会中断服务端进程），而且 3 个机器人会因"全票"在无人确认的情况下直接重开。
+- `tests/round3.test.ts`：`createHarness` 支持覆盖 `botActionDelayMs` / `rematchTimeoutMs`，新增两个用例：
+  1. 正式房（非 test）对局结束后机器人座位 1/2/3 出现在 `game:rematch-state.votes`（count=3），人类未确认时到超时取消、不会自动开局；
+  2. 真人在结算页离开后机器人不再投票，服务端不崩溃（新连接可正常建房）。
+
+### 验证结果
+
+- 反向验证：临时恢复 `kind !== 'test'` 限制时用例 1 失败；临时移除人数防护时用例 2 报 3 个未捕获异常（"房间人数不足"）。
+- `npm test`：9 个测试文件、51 个测试全部通过。
+- `npm run build`：服务端 TypeScript 与前端 Vue/Vite 生产构建通过。
