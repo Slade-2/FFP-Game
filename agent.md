@@ -574,3 +574,35 @@
 - 反向验证：临时恢复 `kind !== 'test'` 限制时用例 1 失败；临时移除人数防护时用例 2 报 3 个未捕获异常（"房间人数不足"）。
 - `npm test`：9 个测试文件、51 个测试全部通过。
 - `npm run build`：服务端 TypeScript 与前端 Vue/Vite 生产构建通过。
+
+## 本次修复：友/敌标记本地视角 + 手牌选中/悬停去金边（分支 `codex/fixbug`）
+
+### 修改内容
+
+- `client/src/App.vue`：`teamRoleForSeat(seat)` 改为以本地玩家 `mySeat` 为基准判定。
+  - 自己恒为 `friend`；与本地玩家同侧（同属叫牌人一侧，或同属非叫牌人一侧）为 `friend`，异侧为 `enemy`。
+  - `selfCall` 时 `teammateSeat === callerSeat`，叫牌人独一队，另三家按公式自然互为 `friend`，符合 1v3 三家联手的实际关系。
+  - `revealedTeam` 的两种来源（公开打出被叫牌、私密 team-reveal）、事件协议与服务端均未改动；`mySeat` 为空时返回 `undefined`（不显示标记）。
+- `client/src/components/CardView.vue`（纯 CSS，无逻辑改动）：
+  - `.playing-card.selected`：去掉 `outline`/`outline-offset` 与金色光晕，保留 `z-index: 4`、`box-shadow: 0 12px 18px rgb(4 10 22 / 34%)`、`transform: translateY(-14px)`。
+  - `button.playing-card.hand:…:hover`：去掉金边与金色光晕，保留 `z-index: auto`、`box-shadow: 0 7px 12px rgb(4 10 22 / 32%)`、`transform: translateY(-8px)`。
+  - `.playing-card.hand.selected`：去掉金边与金色光晕，保留 `z-index: auto`、`box-shadow: 0 8px 13px rgb(4 10 22 / 34%)`、`filter: none`、`transform: translateY(-16px)`。
+  - `.playing-card.hand` 的 transition 中删除已无用的 `outline-color`。
+
+### 验证结果
+
+- `npm run build`：服务端 TypeScript + 前端 `vue-tsc`/Vite 生产构建通过。
+- `npm test`：9 个测试文件、51 个测试全部通过（项目无客户端单测，未新增测试文件）。
+- 逻辑校验：脚本直接抽取 `App.vue` 中改后的 `teamRoleForSeat` 源码执行，覆盖四种本地视角（叫牌人 / 被叫者 / 路人 A / 路人 B）：
+  - 2v2：叫牌人/被叫者视角 `[友,敌,友,敌]`，两名路人视角 `[敌,友,敌,友]`；被叫者视角与修改前一致。
+  - 1v3（`selfCall`）：叫牌人视角 `[友,敌,敌,敌]`，另三家视角 `[敌,友,友,友]`。
+  - 任何存在 reveal 的情况下自己恒为 `friend`；无 reveal 时统一 `undefined`。
+- 浏览器实测（无头 Chrome 驱动真实页面，`PORT=3100` 本地实例，测试房 + 3 机器人）：
+  - 打花局选中第 1 张手牌、悬停第 3 张：`outline-style: none`，投影为中性色（无 `rgb(246 200 93)` / `rgb(255 224 154)`），transform 分别为 `translateY(-16px)` / `translateY(-8px)`；全页扫描无金色 outline 元素。
+  - 打朋友局（房间 9257，机器人1 强手自叫 ♦6 并公开打出）：本地视角为「自己 + 另两家 友、叫牌人 敌」；旧逻辑下自己与另一名路人会显示 敌。
+  - 注：Chrome 在 `outline-style: none` 时仍会报 `outline-width: 3px` 初始值，脚本断言以 `outline-style` 为准。
+
+### 未验证项与残余风险
+
+- 未新增客户端单测：`vitest.config.ts` 只收集 `tests/**`（node 环境，无 jsdom/@vue/test-utils），逻辑校验通过脚本抽取真实函数完成；若需长期防回归，可把该纯函数抽成独立模块再补 vitest 用例。
+- 只做了桌面视口（1440×900）验证，未回归移动端竖屏/触屏样式；本次改动仅去掉描边与光晕，不影响布局。

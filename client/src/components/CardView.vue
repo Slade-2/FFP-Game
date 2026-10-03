@@ -108,11 +108,7 @@ button.playing-card {
 
 .playing-card.selected {
   z-index: 4;
-  outline: 2px solid #f6c85d;
-  outline-offset: 2px;
-  box-shadow:
-    0 0 18px rgb(246 200 93 / 58%),
-    0 12px 18px rgb(4 10 22 / 34%);
+  box-shadow: 0 12px 18px rgb(4 10 22 / 34%);
   transform: translateY(-14px);
 }
 
@@ -129,27 +125,18 @@ button.playing-card {
   transform-origin: 50% 100%;
   transition:
     transform 150ms ease-out,
-    box-shadow 150ms ease-out,
-    outline-color 120ms ease-out;
+    box-shadow 150ms ease-out;
 }
 
 button.playing-card.hand:not(.no-hover):not(.selected):not(:disabled):hover {
   z-index: auto;
-  outline: 2px solid #ffe09a;
-  outline-offset: 1px;
-  box-shadow:
-    0 0 0 2px rgb(255 224 154 / 18%),
-    0 7px 12px rgb(4 10 22 / 32%);
+  box-shadow: 0 7px 12px rgb(4 10 22 / 32%);
   transform: translateY(-8px);
 }
 
 .playing-card.hand.selected {
   z-index: auto;
-  outline: 2px solid #f6c85d;
-  outline-offset: 1px;
-  box-shadow:
-    0 0 0 2px rgb(246 200 93 / 18%),
-    0 8px 13px rgb(4 10 22 / 34%);
+  box-shadow: 0 8px 13px rgb(4 10 22 / 34%);
   filter: none;
   transform: translateY(-16px);
 }

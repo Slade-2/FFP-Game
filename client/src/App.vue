@@ -663,15 +663,16 @@ function tablePlayFromAction(action: TableAction): TablePlay | null {
 
 function teamRoleForSeat(seat: number): 'friend' | 'enemy' | undefined {
   const reveal = revealedTeam.value;
-  if (!reveal) {
+  const ownSeat = mySeat.value;
+  if (!reveal || ownSeat === null) {
     return undefined;
   }
-  if (reveal.selfCall) {
-    return seat === reveal.callerSeat ? 'friend' : 'enemy';
+  if (seat === ownSeat) {
+    return 'friend';
   }
-  return seat === reveal.callerSeat || seat === reveal.teammateSeat
-    ? 'friend'
-    : 'enemy';
+  const seatOnCallerSide = seat === reveal.callerSeat || seat === reveal.teammateSeat;
+  const ownSeatOnCallerSide = ownSeat === reveal.callerSeat || ownSeat === reveal.teammateSeat;
+  return seatOnCallerSide === ownSeatOnCallerSide ? 'friend' : 'enemy';
 }
 
 function scoreEntries(payload: GameOver): Array<{ seat: number; value: number }> {
