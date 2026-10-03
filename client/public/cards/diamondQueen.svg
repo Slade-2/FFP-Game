@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 300">
+  <defs>
+    <g id="suitShape"><path d="M0-23 L22 0 L0 23 L-22 0 Z"/>
+    </g>
+    <g id="corner">
+      <text x="17" y="56" fill="#D63A3A" font-family="Arial Rounded MT Bold, Avenir Next, Trebuchet MS, Arial, sans-serif" font-size="49" font-weight="800">Q</text>
+      <use href="#suitShape" transform="translate(29 81) scale(.56)" fill="#D63A3A"/>
+    </g>
+  </defs>
+  <rect x="1" y="1" width="198" height="298" rx="8" fill="#FFFFFF" stroke="#E3E6EC" stroke-width="1"/>
+  <use href="#corner"/>
+  <use href="#suitShape" transform="translate(118 184) scale(2.48)" fill="#D63A3A"/>
+</svg>

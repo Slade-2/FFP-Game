@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 300">
+  <defs>
+    <radialGradient id="backGlow" cx="50%" cy="43%" r="67%">
+      <stop offset="0" stop-color="#2B3C60" stop-opacity=".46"/>
+      <stop offset="1" stop-color="#141E33" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="200" height="300" rx="8" fill="#141E33"/>
+  <rect width="200" height="300" rx="8" fill="url(#backGlow)"/>
+  <rect x="10" y="10" width="180" height="280" rx="5" fill="none" stroke="#C9A86A" stroke-width="1.2"/>
+  <text x="100" y="188" text-anchor="middle" fill="#D4AF6E" font-family="Kaiti, STKaiti, KaiTi, serif" font-size="108" font-weight="400">花</text>
+</svg>
