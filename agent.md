@@ -483,3 +483,24 @@
   - 上玩家/上方槽位、左右面板/同侧槽位、自己信息/按钮、底部槽位/自己信息共五组碰撞检测均无重叠。
   - 手牌底部为 `838px`，视口高度 `844px`，无裁切。
 - 手牌状态实测：hover 为 `-8px` 浅金边，选中为 `-16px` 金边；选中后再悬停仍保持 `-16px`。
+
+## 本次任务：接入 GitHub 版本管理
+
+### 修改内容
+
+- 在项目根目录 `FFP-Game/` 初始化 Git 仓库，默认分支为 `main`。
+- 首次提交 `f3f0a8b chore: 初始化 FFP-Game 项目`，纳入 90 个文件。
+- 创建 GitHub 私有仓库 `Slade-2/FFP-Game`，添加 `origin` 远程并推送 `main` 分支。
+
+### 实现方式
+
+- 沿用已有 `.gitignore`，排除 `node_modules/`、`dist/`、`data/`、`.ffp-game/`、`.DS_Store`、`*.log`。
+- Git 身份仅配置在本仓库：`Flynn <65545240+Slade-2@users.noreply.github.com>`。
+- 使用已登录的 `gh` CLI 创建仓库并完成推送，仓库可见性为 private。
+
+### 验证结果
+
+- `npm test`：8 个测试文件、35 个用例全部通过。
+- 暂存检查：90 个文件，未包含 `node_modules`、`dist`、`data`、`.ffp-game`、`.DS_Store`。
+- `git status`：`main` 与 `origin/main` 同步，工作区干净。
+- 仓库校验：default branch 为 `main`，visibility 为 `PRIVATE`。
