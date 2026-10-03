@@ -504,3 +504,19 @@
 - 暂存检查：90 个文件，未包含 `node_modules`、`dist`、`data`、`.ffp-game`、`.DS_Store`。
 - `git status`：`main` 与 `origin/main` 同步，工作区干净。
 - 仓库校验：default branch 为 `main`，visibility 为 `PRIVATE`。
+
+## 本次任务：仓库改为公开访问
+
+### 修改内容
+
+- 将 GitHub 仓库 `Slade-2/FFP-Game` 的可见性由 private 改为 public，任何人均可访问。
+
+### 实现方式
+
+- 使用 `gh repo edit Slade-2/FFP-Game --visibility public --accept-visibility-change-consequences` 修改仓库设置，未改动代码与远程地址。
+
+### 验证结果
+
+- `gh repo view`：visibility 为 `PUBLIC`，default branch 仍为 `main`。
+- 未登录态匿名请求：`https://api.github.com/repos/Slade-2/FFP-Game` 返回 200。
+- 未登录态匿名读取：`https://raw.githubusercontent.com/Slade-2/FFP-Game/main/README.md` 返回 200。
