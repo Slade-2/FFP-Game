@@ -1,0 +1,18 @@
+services:
+  ffp-game:
+    build: .
+    image: ffp-game:latest
+    container_name: ffp-game
+    restart: unless-stopped
+    # N1 的 Docker bridge 端口映射无法从局域网访问，改用主机网络。
+    network_mode: host
+    environment:
+      - PORT=3000
+      - HOST=0.0.0.0
+      - DB_PATH=/app/data/ffp.db
+    volumes:
+      # Docker Root Dir 位于 USB ext4 盘，命名卷随其保存在该盘上。
+      - ffp-data:/app/data
+
+volumes:
+  ffp-data:

@@ -606,3 +606,60 @@
 
 - 未新增客户端单测：`vitest.config.ts` 只收集 `tests/**`（node 环境，无 jsdom/@vue/test-utils），逻辑校验通过脚本抽取真实函数完成；若需长期防回归，可把该纯函数抽成独立模块再补 vitest 用例。
 - 只做了桌面视口（1440×900）验证，未回归移动端竖屏/触屏样式；本次改动仅去掉描边与光晕，不影响布局。
+
+## 本次任务：N1 USB 盘上原生构建 Docker 镜像（分支 `codex/docker-n1`，未完成）
+
+### 修改内容
+
+- 从 `codex/fixbug` 创建 `codex/docker-n1`，未提交、未 push、未建 PR。
+- 新增 `Dockerfile`：Debian `node:22-bookworm-slim` 多阶段构建，构建阶段安装原生模块编译工具并运行 `npm ci`、`npm run build`，运行阶段以 `node` 用户启动并配置健康检查。
+- 新增 `.dockerignore`、`docker-compose.yml`：排除本地依赖/构建/数据；容器配置端口 3000、数据库命名卷和 `unless-stopped`。
+- 新增 `docker-n1-task.md` 记录预检、构建尝试和未完成步骤。
+- 通过 `ssh n1` 核实 N1 是 aarch64，Docker 29.6.1；Docker Root Dir `/overlay/upper/opt/docker` 位于 USB `/dev/sda3` ext4（挂载 `/overlay`，28.0G，预检时可用 27.9G），不是 eMMC。内存约 1.98GB、可用约 1.70GB、无 swap；预期的 119GB U 盘未出现。
+- N1 缺少 `rsync`，使用系统配置的 `apk` 软件源安装 `rsync` 3.5.1-r1；将分支工作目录同步到 USB `/overlay/ffp-game`，排除 `node_modules`、`dist`、`.git`、`data` 等。
+
+### 错误与验证
+
+- 首次 `docker build -t ffp-game:latest .` 失败：构建容器不能解析 `deb.debian.org`，耗时 343 秒；日志保存在 N1 USB `/overlay/ffp-game-build-first.log`。
+- N1 主机网络可访问 Debian 软件源；第二次以 `docker build --network host -t ffp-game:latest .` 重试。Debian 包下载与编译工具安装成功，但 Docker 在 `Step 4/18 : COPY package.json package-lock.json ./` 数分钟无进展。内核同时多次报告 overlayfs 上下层复用警告；未证实警告与停滞的因果关系。第二次耗时 2152 秒后发送 SIGINT 终止（退出码 130），日志在 `/overlay/ffp-game-build.log`。
+- 两次构建尝试已达用户上限；没有生成 `ffp-game:latest` 镜像、没有启动容器，也未运行健康接口、首页、60 秒持续运行或 Mac 局域网访问验证。未改动 N1 以外的部署，也未碰 Muse 服务。
+- Mac 本地 `npm run build` 通过（仅验证项目自身的 TS/Vue 生产构建，不代表 N1 Docker 镜像构建成功）；已清理首次失败构建的临时容器，N1 无正式容器。
+
+## 本次诊断：N1 Docker 构建停滞（只读排查，未修复）
+
+- 通读 N1 的两份构建日志：首次在 `apt-get update` 因 `Temporary failure resolving 'deb.debian.org'` 失败；第二次经 `--network host` 完成 apt 安装，最后停在 `Step 4/18 : COPY package.json package-lock.json ./`，无 Docker 报错，后由人工 SIGINT 终止。
+- `docker info`：Docker 29.6.1、Storage Driver `overlayfs`（`io.containerd.snapshotter.v1`）、Root Dir `/overlay/upper/opt/docker`；`docker info` 未显示 Backing Filesystem 字段。`mount`/`df -T` 证实 `/overlay` 和 Docker Root Dir 均直接挂载于 USB `/dev/sda3` ext4，系统根 `/` 才是 overlayfs。不能把停滞归结为 Docker 数据放在 overlayfs 合并层上。
+- `dmesg` 多次出现 `overlayfs: lowerdir/upperdir/workdir is in-use as upperdir/workdir of another mount, accessing files from both mounts will result in undefined behavior.` 三种警告；未查到 `/dev/sda` I/O 或 ext4 错误。另有 eMMC `mmcblk1` 读错误和一次 USB 1-1 断开（Docker 所在 sda 设备路径为 USB 1-2）。
+- 只做一次最小 Dockerfile 构建（USB 临时目录，基础镜像 + 4KB 上下文 + COPY 小文件 + RUN echo）：`COPY` 数分钟后完成，`RUN` 容器启动阶段超时，300 秒退出码 124。临时目录、镜像及容器最终清理完毕。USB 直接写入并 fsync 16MB 用 10.85 秒，约 1.5MB/s，临时文件已删除。
+- 默认 bridge 的 `enable_ip_masquerade=false`，daemon 设置 `iptables=false`，未见 Docker NAT MASQUERADE 规则；与首次 DNS 失败相符。60 秒容器 DNS 检查因容器创建耗时超限，未取得容器内 `/etc/resolv.conf` 或本轮 DNS 查询结果；第二次尝试被首次超时后异步创建的同名容器阻挡，已按上限停止。
+- 本轮未改 Docker/N1 系统配置、未部署、未提交；只向本记录追加诊断结果。下一轮需先处理 Docker 层操作异常缓慢与桥接网络配置，并在改动前评估现有 Docker 数据和服务影响。
+
+## 本次修复轮：N1 Docker data-root 迁移与构建（分支 `codex/docker-n1`，未部署）
+
+- 迁移前 N1 无容器、无卷，只有 `node:22-bookworm-slim` 标签镜像。将 `daemon.json`、`/etc/config/dockerd`、`docker info`、镜像/卷/容器清单、挂载和磁盘空间信息备份到 USB `/overlay/ffp-docker-backup.MgBcAP`。
+- 根据 `/etc/init.d/dockerd` 源码确认 UCI 是配置来源，`/tmp/dockerd/daemon.json` 由启动脚本生成。停止 Docker 后以 `rsync -aHAX --numeric-ids` 将旧 Root Dir `/overlay/upper/opt/docker` 复制到 USB ext4 `/overlay/docker`（388 秒）；校验内容和元数据无差异。旧目录原样保留。
+- 仅设置并提交 `dockerd.globals.data_root=/overlay/docker` 后启动 Docker。迁移前后 Storage Driver 均为 `overlayfs`、`io.containerd.snapshotter.v1`；Root Dir 从 `/overlay/upper/opt/docker` 变为 `/overlay/docker`，两次 `docker info` 均提示 `No swap limit support`。迁移后的基础镜像可见、daemon 正常，未见新的 overlayfs 上下层复用警告。
+- 对照最小构建用同一 Dockerfile（基础镜像、4KB 左右上下文、COPY 小文件、RUN echo），193 秒成功；诊断轮在 300 秒超时，说明有改善但 N1 的 Docker 层操作仍慢。诊断镜像和临时目录已清理。
+- N1 正式 `docker build --network host -t ffp-game:latest .` 尝试一次。`npm ci`、`npm run build`（服务端 TS 与前端 Vue/Vite）、`npm prune --omit=dev` 均成功；运行阶段复制 `dist` 成功，但 `COPY --from=build /app/node_modules ./node_modules` 超过六分钟无日志进展，依用户要求停止，构建总耗时 2333 秒、退出码 130。完整日志为 USB `/overlay/ffp-docker-backup.MgBcAP/ffp-build.after.log`。没有生成最终镜像。
+- 因正式构建在 COPY 步再次长时间停滞，未启动验证容器、未配置正式容器、未做 Mac 局域网访问测试。N1 Docker daemon 保持运行，Root Dir 仍为 `/overlay/docker`；没有 FFP 容器。没有改动 Muse 或其他服务，没有提交、push 或 PR。
+
+## 本次修复轮 2：单阶段构建并部署到 N1（分支 `codex/docker-n1`）
+
+- `Dockerfile` 改为 Debian Node 22 单阶段构建，避免在 N1 低速 USB 盘上跨阶段复制全部 `node_modules`；保留 `npm ci`、服务端/前端编译、`npm prune --omit=dev`、运行环境、`USER node` 和健康检查，新增 `npm cache clean --force`。首次单阶段构建的递归 `chown -R /app` 超过 20 分钟无新输出后终止（2004 秒、130）；检查数据库写入路径后改为仅 `chown node:node /app/data`。
+- 第二次 `docker build --network host -t ffp-game:latest .` 在 N1 成功，2089 秒，arm64 镜像 `docker image ls` 显示 964MB；日志在 USB `/overlay/ffp-docker-backup.MgBcAP/ffp-build-single-retry.log`。N1 临时容器的健康接口 `{"ok":true}`、首页 200、持续运行超过 60 秒、`listening` 日志和 Docker 健康状态全部通过，随后清理临时容器与卷。
+- 原 `docker-compose.yml` 的 bridge 端口映射只能在 N1 本机访问。按任务要求改为 `network_mode: host` 并重建正式 `ffp-game` 容器。Mac 仍被 N1 防火墙拒绝：`home` 区域默认拒绝入站，原管理规则只放行 80、443、11511。在 USB 备份原 `/etc/config/firewall` 后，仅新增 `firewall.ffp_game` 规则允许 `192.168.0.0/24` 访问 TCP 3000；`fw4 check` 通过并 reload，输出保存在同一 USB 备份目录。未改已有防火墙规则和其他服务。
+- Mac 最终访问 `http://192.168.0.145:3000/api/health` 返回 200 与 `{"ok":true}`，首页 200。正式容器 `running`、`healthy`、重启次数 0，使用 host 网络、`unless-stopped`；数据库命名卷在 USB `/overlay/docker/volumes/ffp-game_ffp-data/_data`，已生成 SQLite 文件；`docker logs` 中可见 `FFP-Game listening on http://0.0.0.0:3000`。
+- 构建日志报告 3 项生产依赖审计告警：`body-parser` 2.3.0 high、`qs` 6.16.0 moderate、`source-map-js` 1.2.1 high；按任务要求未改依赖。另以同一镜像做隔离的异常退出测试，进程退出码 1，`docker logs` 完整保留测试错误和 Node 堆栈，临时容器已删除。游戏完整冒烟测试与真实应用故障仍未发生。旧 Docker 目录和迁移备份保留；未 commit、push、merge 或建 PR。
+
+## N1 部署冒烟测试（2026-11-11）
+
+- 测试前 Codex 周额度已用 35%、剩余 65%，重置时间 2026-11-11 19:14 EST；正式容器 `running`、`healthy`、重启次数 0，Mac 首页和 `/api/health` 均 200，健康响应为 `{"ok":true}`。
+- 根据 `server/` 协议在 Mac 临时目录编写 Socket.IO 测试脚本，通过测试入口创建打花房间、添加 3 个机器人并全员就绪；进入 playing，实际观察 3 次出牌（其中客户端 1 次）及牌数变化，所有请求的 ack 为 ok。正式容器日志仅见启动信息，未见错误。测试产生了名为“冒烟测试”的零分玩家记录，保留未清理。
+- Mac Chrome 无头浏览器访问 N1 首页，页面渲染、连接成功，JS、CSS 和积分榜接口均 200，未捕获资源加载失败或脚本异常；未进行 GUI 交互。
+- 已删除的隔离负向测试容器无法再直接读取；检查 USB 上保存的 `log-probe-run.log` 和 `log-probe-docker.log`，均有主动抛出的 `Error: FFP log probe`、完整 Node 堆栈与版本信息，符合开发记录的预期退出码 1，不是正式容器故障。
+- 重启前 Mac 默认网关为 `192.168.0.1`，不经过 N1。重启 N1 后等待其上线，boot ID 由 `cddbe022-c9cf-41a9-9995-82a2387cf8de` 变为 `8f85522c-1208-4f4b-b5ab-fc6d99aea607`；容器自动恢复为 `running healthy`、重启次数 0，Mac 首页和健康接口再次返回 200、健康响应 `{"ok":true}`。等待期间设备一度不可达，随后自动恢复；未做修复。
+- 未改功能代码、Dockerfile、compose、容器配置或防火墙，未提交、合并或推送；脚本仅放在 `/tmp/ffp-smoke-20261111`。未验证完整对局、GUI 交互或依赖审计告警；当前会话实际模型无法从测试结果独立确认。
+
+## 推送当前分支（2026-11-11）
+
+- 将 `codex/docker-n1` 的已有提交推送到 `origin` 并设置上游。`git ls-remote` 确认远端分支与本地 HEAD 同为 `0141fad`。推送无报错，未提交的 Docker 配置和文档仍保留在本地。
